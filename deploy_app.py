@@ -6,10 +6,11 @@ from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
 from collections import deque
 from models.seformer import SEFormer
 
+# ------------------ PAGE CONFIG ------------------
 st.set_page_config(layout="wide", page_title="Emotion AI")
-
 st.title("🎤 Real-Time Speech Emotion AI (Deployed Version)")
 
+# ------------------ EMOTION MAP ------------------
 emotion_map = {
     0: "Neutral",
     1: "Calm",
@@ -21,8 +22,10 @@ emotion_map = {
     7: "Surprised"
 }
 
+# ------------------ DEVICE ------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# ------------------ LOAD MODEL (CACHED) ------------------
 @st.cache_resource
 def load_model():
     model = SEFormer()
@@ -31,13 +34,25 @@ def load_model():
     model.eval()
     return model
 
-model = load_model()
+# ------------------ SESSION STATE ------------------
+if "model" not in st.session_state:
+    st.session_state.model = None
 
+if "emotion_history" not in st.session_state:
+    st.session_state.emotion_history = deque(maxlen=20)
+
+# ------------------ BUTTON TO LOAD MODEL ------------------
+if st.button("🚀 Start Emotion Detection"):
+    with st.spinner("Loading model..."):
+        st.session_state.model = load_model()
+    st.success("Model Loaded Successfully!")
+
+# ------------------ AUDIO SETTINGS ------------------
 fs = 16000
 window_size = 4 * fs
 
-emotion_history = deque(maxlen=20)
 
+# ------------------ AUDIO PROCESSOR ------------------
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.buffer = np.zeros(0)
@@ -46,29 +61,32 @@ class AudioProcessor(AudioProcessorBase):
         audio = frame.to_ndarray().flatten()
         self.buffer = np.concatenate([self.buffer, audio])
 
-        if len(self.buffer) >= window_size:
+        if len(self.buffer) >= window_size and st.session_state.model is not None:
             chunk = self.buffer[-window_size:]
             audio_tensor = torch.tensor(chunk).unsqueeze(0).to(device)
 
             with torch.no_grad():
-                output = model(audio_tensor)
+                output = st.session_state.model(audio_tensor)
                 probs = torch.softmax(output, dim=1)[0]
                 predicted = torch.argmax(probs).item()
 
-            emotion_history.append(predicted)
+            st.session_state.emotion_history.append(predicted)
 
         return frame
 
+
+# ------------------ WEBRTC STREAM ------------------
 webrtc_streamer(
     key="emotion-stream",
     mode="sendonly",
     audio_processor_factory=AudioProcessor,
 )
 
-if len(emotion_history) > 0:
+# ------------------ PLOT ------------------
+if len(st.session_state.emotion_history) > 0:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        y=list(emotion_history),
+        y=list(st.session_state.emotion_history),
         mode='lines+markers'
     ))
 
@@ -85,4 +103,5 @@ if len(emotion_history) > 0:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.success(f"Current Emotion: {emotion_map[emotion_history[-1]]}")
+    current_emotion = emotion_map[st.session_state.emotion_history[-1]]
+    st.success(f"Current Emotion: {current_emotion}")
